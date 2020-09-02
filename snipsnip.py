@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
+import argparse
+import datetime
+import os
+import pickle
+import subprocess
+import sys
+import time
+from pprint import pprint
+from urllib.parse import parse_qs, urlparse
+
 import requests as r
 from bs4 import BeautifulSoup
-from pprint import pprint
-import os
-import sys
-import pickle
-import argparse
-import time
-import datetime
-from urllib.parse import urlparse, parse_qs
-import subprocess
 
 SIGN_IN = "https://signin.intra.42.fr/users/sign_in"
 PROFILE = "https://profile.intra.42.fr/"
