@@ -1,3 +1,4 @@
 *.pickle
 *.pkl
 .ipynb_checkpoints
+config.ini
