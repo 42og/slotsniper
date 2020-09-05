@@ -45,6 +45,7 @@ class Sniper:
         self.user = config["authentication"]["user"]
         self.password = config["authentication"]["password"]
         self.save_file = config["sniper"].get("save_file", None)
+        self.timer_interval = int(config["sniper"].get("timer_interval", "30"))
         self.start = datetime.time.fromisoformat(config["sniper"].get("start", "08:00"))
         self.end = datetime.time.fromisoformat(config["sniper"].get("end", "18:00"))
         self.days = list(map(int, config["sniper"].get("days", "0,1,2,3,4").split(",")))
@@ -226,7 +227,7 @@ class Sniper:
                 if len(slots) > 0:
                     self.take_slot(project, slots[0])
                     continue
-            time.sleep(30)
+            time.sleep(self.timer_interval)
 
 
 if __name__ == "__main__":
