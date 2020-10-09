@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 import argparse
-import configparser
 import datetime
 import logging
-import os
-import pickle
-import pprint
 import re
 import sys
 import time
 from urllib.parse import parse_qs, urlparse
 
+import pytz
 import requests as r
+import yaml
 from bs4 import BeautifulSoup
 
 SIGN_IN = "https://signin.intra.42.fr/users/sign_in"
 PROFILE = "https://profile.intra.42.fr/"
 PROJECT = "https://projects.intra.42.fr"
 DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
+LOGGING_FORMAT = "%(levelname)-8s %(message)s"
 
 
 def make_slots(json):
@@ -38,29 +37,89 @@ def make_slots(json):
     return result
 
 
+def login(user, password):
+    session = r.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:79.0) Gecko/20100101 Firefox/79.0"
+        }
+    )
+
+    req1 = session.get(SIGN_IN)
+    if req1.status_code == 200:
+        page_signin = req1.content.decode("utf-8")
+    else:
+        raise Exception(
+            f"Failed to get sign-in page, requests.get returned: {req1.status_code}"
+        )
+
+    soup = BeautifulSoup(page_signin, features="html.parser")
+
+    post_data = {}
+    for form_input in soup.find_all("input"):
+        key = form_input.get("name")
+        value = form_input.get("value")
+        post_data[key] = value
+
+    post_data["user[login]"] = user
+    post_data["user[password]"] = password
+
+    req2 = session.post(SIGN_IN, data=post_data, allow_redirects=False)
+    if req2.status_code == 200 or req2.status_code == 302:
+        logging.info("Logged into intra.42.fr")
+        return session
+    raise Exception(
+        f"Failed to post login data, requests.post returned: {req2.status_code}"
+    )
+
+
+def gen_time_ranges(config, span):
+    def to_timedelta(s):
+        hours, minutes = map(int, s.split(":"))
+        return datetime.timedelta(hours=hours, minutes=minutes)
+
+    days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+    default = config.get("default", {"start": "08:00", "end": "18:00"})
+    default["start"] = to_timedelta(default["start"])
+    default["end"] = to_timedelta(default["end"])
+
+    tz = pytz.timezone("Europe/Paris")
+    today = datetime.date.today()
+    today = tz.localize(
+        datetime.datetime(year=today.year, month=today.month, day=today.day)
+    )
+
+    # Gen time ranges
+    ranges = []
+    for date in (today + datetime.timedelta(days=n) for n in range(span)):
+        day = days[date.weekday()]
+        if day not in config:
+            ranges.append((date + default["start"], date + default["end"]))
+            continue
+        for time_range in config[day]:
+            start = to_timedelta(time_range["start"])
+            end = to_timedelta(time_range["end"])
+            ranges.append((date + start, date + end))
+
+    return ranges
+
+
 class Sniper:
     session = None
 
     def __init__(self, config):
-        self.user = config["authentication"]["user"]
-        self.password = config["authentication"]["password"]
-        self.save_file = config["sniper"].get("save_file", None)
-        self.timer_interval = int(config["sniper"].get("timer_interval", "30"))
-        self.start = datetime.time.fromisoformat(config["sniper"].get("start", "08:00"))
-        self.end = datetime.time.fromisoformat(config["sniper"].get("end", "18:00"))
-        self.days = list(map(int, config["sniper"].get("days", "0,1,2,3,4").split(",")))
+        self.refresh_rate = config.get("refresh_rate", 30)
+        self.span = config.get("span", 5)
+        self.time_ranges = gen_time_ranges(config, self.span)
+        self.blacklist = config.get("blacklist", list())
+
         try:
-            if (
-                self.save_file is not None
-                and os.path.exists(self.save_file)
-                and self.load_session()
-            ):
-                logging.info(f"Session loaded from {self.save_file}")
-            else:
-                self.login()
+            self.session = login(config["user"], config["password"])
         except Exception as err:
             logging.error(f"Error fetching session: {err}")
             sys.exit(1)
+
         self.projects = self.get_projects()
 
     def get_project_info(self, url):
@@ -86,6 +145,9 @@ class Sniper:
             .find("a", href=re.compile(r"/projects/"))
             .text.strip()
         )
+        if info["name"] in self.blacklist:
+            logging.info(f"Found {info['name']} -- blacklisted")
+            return None
 
         req = self.session.get(info["slots_url"])
         if req.status_code == 200:
@@ -117,63 +179,9 @@ class Sniper:
         for project in soup.find_all("a", class_="project-item"):
             info = self.get_project_info(project["href"])
             if info is not None:
+                logging.info(f"Found {info['name']}")
                 projects.append(info)
-
         return projects
-
-    def store_session(self):
-        try:
-            with open(self.save_file, "wb") as fp:
-                pickle.dump(self.session, fp)
-            return True
-        except OSError as err:
-            logging.warning(f"Error saving session: {err}")
-            return False
-
-    def load_session(self):
-        try:
-            with open(self.save_file, "rb") as fp:
-                self.session = pickle.load(fp)
-            return True
-        except OSError as err:
-            logging.warning(f"Error loading file: {err}")
-            return False
-
-    def login(self):
-        self.session = r.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:79.0) Gecko/20100101 Firefox/79.0"
-            }
-        )
-
-        req1 = self.session.get(SIGN_IN)
-        if req1.status_code == 200:
-            page_signin = req1.content.decode("utf-8")
-        else:
-            raise Exception(
-                f"Failed to get sign-in page, requests.get returned: {req1.status_code}"
-            )
-
-        soup = BeautifulSoup(page_signin, features="html.parser")
-
-        post_data = {}
-        for form_input in soup.find_all("input"):
-            key = form_input.get("name")
-            value = form_input.get("value")
-            post_data[key] = value
-
-        post_data["user[login]"] = self.user
-        post_data["user[password]"] = self.password
-
-        req2 = self.session.post(SIGN_IN, data=post_data, allow_redirects=False)
-        if req2.status_code == 200 or req2.status_code == 302:
-            if self.save_file and self.store_session():
-                logging.info(f"Session saved to {self.save_file}")
-            return True
-        raise Exception(
-            f"Failed to post login data, requests.post returned: {req2.status_code}"
-        )
 
     def take_slot(self, project, slot):
         post_url = (
@@ -182,9 +190,10 @@ class Sniper:
         )
         body = {"start": slot["start"], "end": slot["end"], "_method": "put"}
         self.session.headers.update(
-            {"X-CSRF-Token": project["csrf_token"],}
+            {
+                "X-CSRF-Token": project["csrf_token"],
+            }
         )
-        pprint.pprint(self.session.headers)
         req = self.session.post(post_url, data=body)
         if req.status_code == 200:
             logging.info(
@@ -196,17 +205,15 @@ class Sniper:
             )
 
     def snipe(self):
-        slot_filter = (
-            lambda slot: (
-                self.start
-                <= datetime.time(slot["start"].hour, slot["start"].minute)
-                <= self.end
-            )
-            and slot["start"].weekday() in self.days
-        )
+        def slot_filter(slot):
+            for start, end in self.time_ranges:
+                if start <= slot["start"] <= end:
+                    return True
+            return False
+
         while True:
             today = datetime.date.today()
-            end_date = today + datetime.timedelta(days=5)
+            end_date = today + datetime.timedelta(days=self.span)
             for project in self.projects:
                 url_json = (
                     project["slots_json"]
@@ -227,7 +234,7 @@ class Sniper:
                 if len(slots) > 0:
                     self.take_slot(project, slots[0])
                     continue
-            time.sleep(self.timer_interval)
+            time.sleep(self.refresh_rate)
 
 
 if __name__ == "__main__":
@@ -245,10 +252,8 @@ if __name__ == "__main__":
     parser.add_argument("file", type=argparse.FileType("r"), help="config file")
 
     args = parser.parse_args()
-    logging.basicConfig(level=log_level[args.debug])
-    config = configparser.ConfigParser()
-    config.read_file(args.file)
+    logging.basicConfig(level=log_level[args.debug], format=LOGGING_FORMAT)
+    config = yaml.safe_load(args.file)
 
     sniper = Sniper(config)
-
     sniper.snipe()

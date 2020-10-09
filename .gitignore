@@ -1,4 +1,6 @@
 *.pickle
 *.pkl
 .ipynb_checkpoints
-config.ini
+config.yml
+.vscode
+.venv

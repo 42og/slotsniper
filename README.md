@@ -7,23 +7,23 @@ Helper script to find and snipe corrections slots automatically
 
 # Features
 - Automatically finds "set as finished" projects
-- Looks for available slots meeting requirements in `config.ini`
+- Looks for available slots meeting requirements in `config.yml`
 - Snipes the correction slot
 
 # Installation
-First you need to create a virtualenv (or make sure [bs4](https://www.crummy.com/software/BeautifulSoup/bs4/doc/) and [requests](https://requests.readthedocs.io/en/master/) are installed)
+First you need to create a virtualenv.
 ```shell
 $ python3 -m venv .venv
 $ source .venv/bin/activate
 $ pip install -r requirements.txt
 ```
-Then rename or copy the contents of `config.example.ini` and edit it as you need.
+Then rename or copy the contents of `config.example.yml` and edit it as you need.
 
 # Usage
 ```shell
-$ ./slotsniper.py config.ini
+$ ./slotsniper.py config.yml
 ```
 
 # TODO
-- [ ] blacklist projects
-- [ ] ???
+- [ ] Use cron instead of a sleep loop
+- [ ] Custom ranges
